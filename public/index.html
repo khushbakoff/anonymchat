@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AnonChat — Anonymous Messenger</title>
+  <meta name="description" content="Anonymous real-time messenger with WebRTC video/audio calls. No registration, no data storage." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { inter: ['Inter', 'sans-serif'] },
+          colors: {
+            tg: {
+              bg: '#0e1621',
+              panel: '#17212b',
+              bubble: '#182533',
+              self: '#2b5278',
+              border: '#1e2c3a',
+              accent: '#5294e0',
+              text: '#e8eaed',
+              muted: '#6c7883',
+              green: '#4dae61',
+              red: '#e05252',
+              hover: '#1e2c3a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0e1621; color: #e8eaed; margin: 0; height: 100vh; overflow: hidden; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #1e2c3a; border-radius: 10px; }
+
+    /* Animations */
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(30px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes ripple { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.5); opacity: 0; } }
+    @keyframes bounce { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1.0); } }
+
+    .fade-in { animation: fadeIn 0.25s ease-out forwards; }
+    .slide-up { animation: slideUp 0.35s cubic-bezier(0.16,1,0.3,1) forwards; }
+
+    /* Typing dots */
+    .dot { width: 7px; height: 7px; background: #6c7883; border-radius: 50%; display: inline-block; animation: bounce 1.4s infinite ease-in-out both; }
+    .dot:nth-child(1) { animation-delay: -0.32s; }
+    .dot:nth-child(2) { animation-delay: -0.16s; }
+
+    /* Video grid */
+    #video-container { display: none; }
+    #video-container.active { display: flex; }
+
+    /* Call ripple */
+    .call-btn.active::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: currentColor;
+      animation: ripple 1.5s infinite;
+    }
+
+    /* Message bubble tail */
+    .bubble-self { border-bottom-right-radius: 4px !important; }
+    .bubble-other { border-bottom-left-radius: 4px !important; }
+
+    /* Input focus ring */
+    #msg-input:focus { outline: none; box-shadow: 0 0 0 2px #5294e030; }
+
+    /* Overlay */
+    #overlay { backdrop-filter: blur(12px); }
+
+    /* Video element */
+    video { border-radius: 12px; background: #0e1621; object-fit: cover; }
+
+    /* Online badge pulse */
+    .online-dot { animation: pulse 2s infinite; }
+  </style>
+</head>
+
+<body class="flex flex-col h-screen select-none">
+
+  <!-- ═══════════════════════════════════════════ JOIN OVERLAY ════════════════ -->
+  <div id="overlay" class="fixed inset-0 z-50 flex items-center justify-center bg-tg-bg/90 px-4">
+    <div id="join-card" class="slide-up w-full max-w-sm bg-tg-panel rounded-2xl p-7 shadow-2xl border border-tg-border">
+      <!-- Logo -->
+      <div class="flex items-center gap-3 mb-6">
+        <div class="w-12 h-12 rounded-2xl bg-tg-accent flex items-center justify-center text-2xl shadow-lg shadow-tg-accent/30">💬</div>
+        <div>
+          <h1 class="font-bold text-lg text-tg-text leading-tight">AnonChat</h1>
+          <p class="text-xs text-tg-muted">Anonim · Tezkor · Xavfsiz</p>
+        </div>
+      </div>
+
+      <!-- Room Info (if URL has room param) -->
+      <div id="room-invite-banner" class="hidden mb-4 px-3 py-2 bg-tg-accent/10 border border-tg-accent/30 rounded-xl text-xs text-tg-accent flex items-center gap-2">
+        <span>🔗</span>
+        <span>Siz taklif havolasiga kirdingiz</span>
+      </div>
+
+      <!-- Nickname -->
+      <div class="mb-4">
+        <label class="block text-xs text-tg-muted mb-1.5 font-medium tracking-wide uppercase">Taxallus</label>
+        <input id="nickname-input" type="text" maxlength="32" placeholder="Ismingizni kiriting..."
+          class="w-full bg-tg-bg border border-tg-border rounded-xl px-4 py-3 text-tg-text placeholder-tg-muted text-sm focus:border-tg-accent transition-colors outline-none" />
+      </div>
+
+      <!-- Room ID -->
+      <div class="mb-5">
+        <label class="block text-xs text-tg-muted mb-1.5 font-medium tracking-wide uppercase">Xona ID</label>
+        <div class="flex gap-2">
+          <input id="room-input" type="text" placeholder="Xona ID yoki yangi yarating"
+            class="flex-1 bg-tg-bg border border-tg-border rounded-xl px-4 py-3 text-tg-text placeholder-tg-muted text-sm focus:border-tg-accent transition-colors outline-none" />
+          <button id="gen-room-btn" title="Yangi xona yaratish"
+            class="px-3 py-3 bg-tg-border hover:bg-tg-hover rounded-xl text-tg-muted hover:text-tg-text transition-all text-sm">
+            🎲
+          </button>
+        </div>
+      </div>
+
+      <!-- Join Button -->
+      <button id="join-btn"
+        class="w-full py-3 bg-tg-accent hover:bg-blue-500 rounded-xl font-semibold text-white transition-all duration-200 text-sm shadow-lg shadow-tg-accent/20 active:scale-95">
+        Kirish →
+      </button>
+
+      <p class="text-center text-xs text-tg-muted mt-4">Hech qanday ma'lumot saqlanmaydi 🔒</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ CHAT UI ═════════════════════ -->
+  <div id="chat-app" class="hidden flex-col h-full">
+
+    <!-- ── Header ── -->
+    <header class="flex items-center gap-3 px-4 py-3 bg-tg-panel border-b border-tg-border shrink-0 z-10">
+      <div class="w-10 h-10 rounded-full bg-tg-accent/20 flex items-center justify-center text-tg-accent font-bold text-sm shrink-0">
+        #
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <span id="header-room" class="font-semibold text-tg-text text-sm truncate"></span>
+          <span class="w-2 h-2 rounded-full bg-tg-green online-dot shrink-0"></span>
+        </div>
+        <p id="header-status" class="text-xs text-tg-muted truncate">Bog'lanish...</p>
+      </div>
+      <!-- Controls -->
+      <div class="flex items-center gap-1">
+        <button id="copy-link-btn" title="Havolani nusxalash"
+          class="p-2 rounded-xl hover:bg-tg-hover text-tg-muted hover:text-tg-text transition-all text-base">🔗</button>
+        <button id="audio-btn" title="Audio call"
+          class="relative p-2 rounded-xl hover:bg-tg-hover text-tg-muted hover:text-tg-green transition-all text-base call-btn">🎙️</button>
+        <button id="video-btn" title="Video call"
+          class="relative p-2 rounded-xl hover:bg-tg-hover text-tg-muted hover:text-tg-accent transition-all text-base call-btn">📹</button>
+        <button id="leave-btn" title="Xonadan chiqish"
+          class="p-2 rounded-xl hover:bg-tg-hover text-tg-muted hover:text-tg-red transition-all text-base">🚪</button>
+      </div>
+    </header>
+
+    <!-- ── Video Grid ── -->
+    <div id="video-container" class="px-3 pt-3 gap-2 flex-wrap shrink-0" style="max-height:45vh; overflow-y:auto;">
+      <div class="relative flex-1 min-w-[160px]">
+        <video id="local-video" autoplay muted playsinline class="w-full h-40 sm:h-48 bg-tg-bubble"></video>
+        <span class="absolute bottom-2 left-2 text-xs bg-black/60 px-2 py-0.5 rounded-lg text-white">Sen (muted)</span>
+        <div id="local-controls" class="absolute top-2 right-2 flex gap-1">
+          <button id="mute-btn" title="Mikrofon"
+            class="w-8 h-8 rounded-full bg-black/60 hover:bg-tg-red flex items-center justify-center text-sm transition-all">🎤</button>
+          <button id="cam-btn" title="Kamera"
+            class="w-8 h-8 rounded-full bg-black/60 hover:bg-tg-red flex items-center justify-center text-sm transition-all">📸</button>
+        </div>
+      </div>
+      <div id="remote-videos" class="flex gap-2 flex-wrap flex-1"></div>
+    </div>
+
+    <!-- ── Messages ── -->
+    <div id="messages" class="flex-1 overflow-y-auto px-3 py-4 space-y-1" style="scroll-behavior: smooth;">
+      <!-- Messages injected here -->
+    </div>
+
+    <!-- ── Typing indicator ── -->
+    <div id="typing-bar" class="hidden px-4 pb-1 text-xs text-tg-muted flex items-center gap-2 shrink-0">
+      <div class="flex gap-0.5"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <span id="typing-text"></span>
+    </div>
+
+    <!-- ── Message Input ── -->
+    <div class="px-3 pb-3 pt-1 shrink-0 bg-tg-bg border-t border-tg-border">
+      <div class="flex items-end gap-2 bg-tg-panel rounded-2xl px-4 py-2 border border-tg-border">
+        <textarea id="msg-input" rows="1" placeholder="Xabar yozing..."
+          class="flex-1 bg-transparent text-tg-text placeholder-tg-muted text-sm resize-none max-h-32 leading-5 py-1.5 outline-none transition-all"
+          style="scrollbar-width: thin;"></textarea>
+        <button id="send-btn"
+          class="w-9 h-9 shrink-0 mb-0.5 rounded-xl bg-tg-accent hover:bg-blue-500 flex items-center justify-center text-white text-base transition-all active:scale-90 shadow-md shadow-tg-accent/20">
+          ➤
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toast ── -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-tg-panel border border-tg-border text-sm text-tg-text shadow-2xl opacity-0 pointer-events-none transition-all duration-300 whitespace-nowrap">
+  </div>
+
+  <!-- ═══════════════════════════════════════════ SCRIPTS ═════════════════════ -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script>
+  (() => {
+    'use strict';
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const qs = (sel, root = document) => root.querySelector(sel);
+
+    function uuid() {
+      return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+        (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+      );
+    }
+
+    function escapeHtml(str) {
+      const d = document.createElement('div');
+      d.appendChild(document.createTextNode(str));
+      return d.innerHTML;
+    }
+
+    function formatTime(ts) {
+      return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    let toastTimer;
+    function showToast(msg, duration = 2500) {
+      const el = $('toast');
+      el.textContent = msg;
+      el.style.opacity = '1';
+      el.style.transform = 'translateX(-50%) translateY(0)';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(-50%) translateY(8px)';
+      }, duration);
+    }
+
+    function scrollToBottom(smooth = true) {
+      const m = $('messages');
+      m.scrollTo({ top: m.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
+    }
+
+    // ── URL params ───────────────────────────────────────────────────────────
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlRoom = urlParams.get('room');
+    if (urlRoom) {
+      $('room-input').value = urlRoom;
+      $('room-invite-banner').classList.remove('hidden');
+    }
+
+    // Auto-generate room on load if no URL room
+    if (!urlRoom) {
+      $('room-input').value = uuid().split('-')[0].toUpperCase();
+    }
+
+    $('gen-room-btn').addEventListener('click', () => {
+      $('room-input').value = uuid().split('-')[0].toUpperCase();
+    });
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let socket = null;
+    let peer = null;
+    let myNickname = '';
+    let myRoomId = '';
+    let localStream = null;
+    let callType = null; // 'audio' | 'video' | null
+    let activeCalls = new Map(); // peerId -> call
+    let typingTimer = null;
+    let isTyping = false;
+    let typingUsers = new Set();
+    let micMuted = false;
+    let camOff = false;
+    let roomUsers = []; // [{ nickname, peerId }]
+
+    // ── Join ─────────────────────────────────────────────────────────────────
+    function startJoin() {
+      const nick = $('nickname-input').value.trim();
+      const room = $('room-input').value.trim().toUpperCase();
+      if (!nick) { showToast('❗ Taxallus kiriting'); $('nickname-input').focus(); return; }
+      if (!room) { showToast('❗ Xona ID kiriting'); $('room-input').focus(); return; }
+      myNickname = nick.substring(0, 32);
+      myRoomId = room;
+      $('overlay').style.display = 'none';
+      $('chat-app').classList.remove('hidden');
+      $('chat-app').classList.add('flex');
+      $('header-room').textContent = '# ' + myRoomId;
+      $('header-status').textContent = 'Bog\'lanmoqda...';
+
+      // Update URL without reload
+      const newUrl = `${location.pathname}?room=${encodeURIComponent(myRoomId)}`;
+      history.replaceState(null, '', newUrl);
+
+      connectSocket();
+    }
+
+    $('join-btn').addEventListener('click', startJoin);
+    $('nickname-input').addEventListener('keydown', e => { if (e.key === 'Enter') startJoin(); });
+    $('room-input').addEventListener('keydown', e => { if (e.key === 'Enter') startJoin(); });
+
+    // ── Socket.io ────────────────────────────────────────────────────────────
+    function connectSocket() {
+      socket = io({ transports: ['polling', 'websocket'] });
+
+      socket.on('connect', () => {
+        initPeer(); // init peer then join after we get peerId
+      });
+
+      socket.on('room-users', (users) => {
+        roomUsers = users;
+        updateUserCount();
+      });
+
+      socket.on('user-joined', ({ nickname, peerId, userCount }) => {
+        roomUsers = roomUsers.filter(u => u.peerId !== peerId);
+        roomUsers.push({ nickname, peerId });
+        updateUserCount();
+        addSystemMsg(`👋 ${escapeHtml(nickname)} qo'shildi`, 'join');
+        // If we are in a call, call the new user
+        if (localStream && peerId) {
+          setTimeout(() => callPeer(peerId), 800);
+        }
+      });
+
+      socket.on('user-left', ({ nickname, userCount }) => {
+        roomUsers = roomUsers.filter(u => u.nickname !== nickname);
+        updateUserCount();
+      });
+
+      socket.on('chat-message', ({ nickname, text, timestamp }) => {
+        const isSelf = nickname === myNickname;
+        addChatMessage(nickname, text, timestamp, isSelf);
+      });
+
+      socket.on('system-message', ({ text, type }) => {
+        addSystemMsg(text, type);
+      });
+
+      socket.on('user-typing', ({ nickname, isTyping: typing }) => {
+        if (nickname === myNickname) return;
+        if (typing) typingUsers.add(nickname);
+        else typingUsers.delete(nickname);
+        renderTyping();
+      });
+
+      socket.on('call-started', ({ callerNickname, type }) => {
+        showToast(`📞 ${callerNickname} ${type === 'video' ? 'video' : 'audio'} call boshladi`);
+      });
+
+      socket.on('call-ended', () => {
+        showToast('📵 Call tugadi');
+      });
+
+      socket.on('disconnect', () => {
+        $('header-status').textContent = 'Uzildi. Qayta ulanmoqda...';
+      });
+    }
+
+    function updateUserCount() {
+      const n = roomUsers.length + 1; // +1 for self
+      $('header-status').textContent = `${n} ishtirokchi`;
+    }
+
+    // ── PeerJS ───────────────────────────────────────────────────────────────
+    function initPeer() {
+      const peerId = 'anon-' + uuid();
+      peer = new Peer(peerId, {
+        host: location.hostname,
+        port: location.port || (location.protocol === 'https:' ? 443 : 80),
+        path: '/peerjs',
+        secure: location.protocol === 'https:',
+      });
+
+      peer.on('open', (id) => {
+        socket.emit('join-room', {
+          roomId: myRoomId,
+          nickname: myNickname,
+          peerId: id,
+        });
+      });
+
+      // Incoming call
+      peer.on('call', (call) => {
+        if (!localStream) return; // can't answer without local stream
+        call.answer(localStream);
+        handleCallStream(call);
+      });
+
+      peer.on('error', (err) => {
+        console.error('PeerJS error:', err);
+      });
+    }
+
+    function callPeer(peerId) {
+      if (!localStream || !peer) return;
+      const call = peer.call(peerId, localStream);
+      if (!call) return;
+      handleCallStream(call);
+    }
+
+    function handleCallStream(call) {
+      activeCalls.set(call.peer, call);
+      call.on('stream', (remoteStream) => {
+        addRemoteVideo(call.peer, remoteStream);
+      });
+      call.on('close', () => {
+        removeRemoteVideo(call.peer);
+        activeCalls.delete(call.peer);
+      });
+      call.on('error', () => {
+        removeRemoteVideo(call.peer);
+        activeCalls.delete(call.peer);
+      });
+    }
+
+    // ── Video/Audio Elements ─────────────────────────────────────────────────
+    function addRemoteVideo(peerId, stream) {
+      removeRemoteVideo(peerId); // remove if exists
+      const wrap = document.createElement('div');
+      wrap.id = 'remote-' + peerId;
+      wrap.className = 'relative flex-1 min-w-[160px]';
+      const v = document.createElement('video');
+      v.autoplay = true;
+      v.playsinline = true;
+      v.className = 'w-full h-40 sm:h-48 bg-tg-bubble';
+      v.style.borderRadius = '12px';
+      v.srcObject = stream;
+      wrap.appendChild(v);
+      $('remote-videos').appendChild(wrap);
+      $('video-container').classList.add('active');
+    }
+
+    function removeRemoteVideo(peerId) {
+      const el = document.getElementById('remote-' + peerId);
+      if (el) el.remove();
+    }
+
+    // ── Start/Stop Call ──────────────────────────────────────────────────────
+    async function startCall(type) {
+      if (localStream) { stopCall(); return; }
+      callType = type;
+      try {
+        const constraints = type === 'video'
+          ? { video: true, audio: true }
+          : { video: false, audio: true };
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        $('local-video').srcObject = localStream;
+        $('video-container').classList.add('active');
+        $('audio-btn').classList.toggle('text-tg-green', true);
+        $('video-btn').classList.toggle('text-tg-accent', type === 'video');
+        socket.emit('call-started', { callerNickname: myNickname, type });
+        // Call all current room users
+        roomUsers.forEach(u => {
+          if (u.peerId) callPeer(u.peerId);
+        });
+        showToast(`📡 ${type === 'video' ? 'Video' : 'Audio'} call boshlandi`);
+        addSystemMsg(`Siz ${type === 'video' ? 'video' : 'audio'} call boshladingiz`, 'call');
+      } catch (err) {
+        showToast('❌ Mikrofon/kameraga ruxsat yo\'q');
+        localStream = null;
+      }
+    }
+
+    function stopCall() {
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+      activeCalls.forEach(call => call.close());
+      activeCalls.clear();
+      $('local-video').srcObject = null;
+      $('remote-videos').innerHTML = '';
+      $('video-container').classList.remove('active');
+      $('audio-btn').classList.remove('text-tg-green');
+      $('video-btn').classList.remove('text-tg-accent');
+      if (socket) socket.emit('call-ended');
+      callType = null;
+      showToast('📵 Call tugatildi');
+    }
+
+    $('audio-btn').addEventListener('click', () => startCall('audio'));
+    $('video-btn').addEventListener('click', () => startCall('video'));
+
+    // Mute / Cam off
+    $('mute-btn').addEventListener('click', () => {
+      if (!localStream) return;
+      micMuted = !micMuted;
+      localStream.getAudioTracks().forEach(t => t.enabled = !micMuted);
+      $('mute-btn').textContent = micMuted ? '🔇' : '🎤';
+      $('mute-btn').classList.toggle('bg-tg-red', micMuted);
+      showToast(micMuted ? '🔇 Mikrofon o\'chirildi' : '🎤 Mikrofon yondirildi');
+    });
+
+    $('cam-btn').addEventListener('click', () => {
+      if (!localStream) return;
+      camOff = !camOff;
+      localStream.getVideoTracks().forEach(t => t.enabled = !camOff);
+      $('cam-btn').textContent = camOff ? '📷' : '📸';
+      $('cam-btn').classList.toggle('bg-tg-red', camOff);
+      showToast(camOff ? '📷 Kamera o\'chirildi' : '📸 Kamera yondirildi');
+    });
+
+    // ── Message Rendering ────────────────────────────────────────────────────
+    function addChatMessage(nickname, text, ts, isSelf) {
+      const msgs = $('messages');
+      const div = document.createElement('div');
+      div.className = `flex ${isSelf ? 'justify-end' : 'justify-start'} fade-in`;
+
+      const initials = nickname.charAt(0).toUpperCase();
+      const colorClass = isSelf ? 'bg-tg-self' : 'bg-tg-bubble';
+      const bubbleClass = isSelf ? 'bubble-self' : 'bubble-other';
+      const nameHtml = isSelf ? '' : `<p class="text-xs font-semibold text-tg-accent mb-1">${escapeHtml(nickname)}</p>`;
+
+      div.innerHTML = `
+        ${!isSelf ? `<div class="w-8 h-8 rounded-full bg-tg-accent/20 flex items-center justify-center text-tg-accent text-xs font-bold shrink-0 mr-2 mt-auto">${initials}</div>` : ''}
+        <div class="max-w-[78%] sm:max-w-[65%]">
+          <div class="${colorClass} ${bubbleClass} rounded-2xl px-3.5 py-2.5 shadow-md">
+            ${nameHtml}
+            <p class="text-sm text-tg-text leading-relaxed whitespace-pre-wrap break-words">${escapeHtml(text)}</p>
+            <p class="text-[10px] text-tg-muted mt-1 ${isSelf ? 'text-right' : 'text-left'}">${formatTime(ts)}</p>
+          </div>
+        </div>
+        ${isSelf ? `<div class="w-8 h-8 rounded-full bg-tg-self/40 flex items-center justify-center text-tg-accent text-xs font-bold shrink-0 ml-2 mt-auto">${initials}</div>` : ''}
+      `;
+      msgs.appendChild(div);
+      scrollToBottom();
+    }
+
+    function addSystemMsg(text, type = 'info') {
+      const msgs = $('messages');
+      const div = document.createElement('div');
+      div.className = 'flex justify-center my-2 fade-in';
+      const iconMap = { join: '👋', leave: '🚪', call: '📞', info: 'ℹ️' };
+      div.innerHTML = `
+        <span class="text-xs text-tg-muted bg-tg-bubble/50 px-3 py-1 rounded-full">${iconMap[type] || ''} ${escapeHtml(text)}</span>
+      `;
+      msgs.appendChild(div);
+      scrollToBottom();
+    }
+
+    // ── Typing Indicator ─────────────────────────────────────────────────────
+    function renderTyping() {
+      const bar = $('typing-bar');
+      if (typingUsers.size === 0) {
+        bar.classList.add('hidden');
+        return;
+      }
+      bar.classList.remove('hidden');
+      const names = Array.from(typingUsers).join(', ');
+      $('typing-text').textContent = `${names} yozmoqda...`;
+    }
+
+    // ── Input & Send ─────────────────────────────────────────────────────────
+    const msgInput = $('msg-input');
+
+    msgInput.addEventListener('input', () => {
+      // auto-resize
+      msgInput.style.height = 'auto';
+      msgInput.style.height = Math.min(msgInput.scrollHeight, 128) + 'px';
+      // typing event
+      if (!isTyping && socket) { socket.emit('typing', true); isTyping = true; }
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => {
+        if (socket) socket.emit('typing', false);
+        isTyping = false;
+      }, 2000);
+    });
+
+    msgInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    $('send-btn').addEventListener('click', sendMessage);
+
+    function sendMessage() {
+      const text = msgInput.value.trim();
+      if (!text || !socket) return;
+      // Optimistic self render
+      addChatMessage(myNickname, text, Date.now(), true);
+      socket.emit('chat-message', { text });
+      msgInput.value = '';
+      msgInput.style.height = 'auto';
+      if (isTyping) { socket.emit('typing', false); isTyping = false; clearTimeout(typingTimer); }
+    }
+
+    // ── Copy Link ────────────────────────────────────────────────────────────
+    $('copy-link-btn').addEventListener('click', () => {
+      const link = `${location.origin}?room=${encodeURIComponent(myRoomId)}`;
+      navigator.clipboard.writeText(link).then(() => {
+        showToast('🔗 Havola nusxalandi!');
+      }).catch(() => {
+        prompt('Havolani nusxalang:', link);
+      });
+    });
+
+    // ── Leave ────────────────────────────────────────────────────────────────
+    $('leave-btn').addEventListener('click', () => {
+      stopCall();
+      if (socket) socket.disconnect();
+      // Reset state
+      roomUsers = [];
+      $('messages').innerHTML = '';
+      $('chat-app').classList.add('hidden');
+      $('chat-app').classList.remove('flex');
+      $('overlay').style.display = 'flex';
+      history.replaceState(null, '', location.pathname);
+      showToast('👋 Xonadan chiqdingiz');
+    });
+
+    // ── Prevent accidental refresh during call ───────────────────────────────
+    window.addEventListener('beforeunload', (e) => {
+      if (localStream) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
+  })();
+  </script>
+</body>
+</html>
